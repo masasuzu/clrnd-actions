@@ -1,0 +1,8 @@
+# Editor / OS files
+.DS_Store
+*.swp
+.idea/
+.vscode/
+
+# Local-only instructions. Not versioned.
+/CLAUDE.local.md
