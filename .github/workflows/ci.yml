@@ -5,7 +5,7 @@ on:
   push:
     branches: [main]
 
-# 新しい push が来たら、同じ ref の古い実行は止める。
+# A new push cancels the older run for the same ref.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -13,7 +13,7 @@ concurrency:
 permissions: {}
 
 env:
-  # テストで入れる clrnd の版。attestation の付いたリリースであること (v0.3.0 以降)。
+  # The clrnd version the tests install. It must be a release with an attestation (v0.3.0 or later).
   CLRND_TEST_VERSION: 0.5.1
 
 jobs:
@@ -28,8 +28,8 @@ jobs:
         with:
           persist-credentials: false
 
-      # runner にも shellcheck は入っているがバージョンが固定できない。版とハッシュを
-      # 指定して自前で入れる。actionlint も PATH のこれを使って run: ブロックを検査する。
+      # The runner image ships shellcheck, but its version cannot be pinned. Install a pinned release
+      # with its hash checked. actionlint also uses this one from PATH to check run: blocks.
       - name: Install ShellCheck
         env:
           SHELLCHECK_VERSION: v0.11.0
@@ -58,14 +58,15 @@ jobs:
 
       - name: Check the shell scripts
         run: |
-          # bash -n は最初のファイルしか見ない (以降は位置引数になる) ので 1 つずつ回す。
+          # bash -n only checks the first file (the rest become positional arguments), so run it
+          # on each script separately.
           for script in lib/*.sh; do
             bash -n "$script"
           done
           shellcheck lib/*.sh
 
-      # actionlint は .github/workflows しか見ないので、action のメタデータは対象外。
-      # action.yml の誤りは下の setup ジョブが実際に uses: して見つける。
+      # actionlint only looks at .github/workflows, not at action metadata. Mistakes in action.yml
+      # are caught by the setup jobs below, which actually run it through uses:.
       - name: actionlint
         run: actionlint -color
 
@@ -103,7 +104,7 @@ jobs:
           test "$(clrnd --version)" = "clrnd version ${CLRND_TEST_VERSION}"
           test "$("$OUTPUT_PATH" --version)" = "clrnd version ${CLRND_TEST_VERSION}"
 
-      # 同じジョブで 2 回目は tool cache から入る経路を通る。
+      # A second run in the same job goes through the tool cache.
       - name: Install clrnd again (cached)
         uses: ./setup
         with:
@@ -120,8 +121,8 @@ jobs:
         with:
           persist-credentials: false
 
-      # gh を使わない経路。このジョブで他のステップが入れない版を使う。tool cache に
-      # 当たるとダウンロードも検証も飛ばされ、この経路を通らないまま成功してしまう。
+      # The path that does not use gh. It uses a version no other step in this job installs: a tool
+      # cache hit skips the download and every check, and the step would pass without taking this path.
       - name: verify-attestation false
         id: no-verify
         uses: ./setup
@@ -149,7 +150,7 @@ jobs:
           [[ "$RESOLVED" =~ ^[0-9]+\.[0-9]+\.[0-9]+ ]]
           test "$(clrnd --version)" = "clrnd version ${RESOLVED}"
 
-      # attestation も --version も無い版は、verify-attestation: false でも断る。
+      # A release with neither an attestation nor --version is refused, even with verify-attestation: false.
       - name: A release before v0.3.0 is refused
         id: unsupported
         continue-on-error: true

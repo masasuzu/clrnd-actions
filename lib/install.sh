@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
-# clrnd のリリース成果物を取ってきて、検証してから PATH に通す。
-# setup/action.yml から呼ばれる。diff / deploy の action からも同じものを呼べるように、
-# action.yml の run: に直接書かずスクリプトに分けている (composite action から同じ
-# リポジトリの別の action を uses: で呼ぶと、ref を式で書けないので版が揃わない)。
+# Download a clrnd release archive, verify it, and put the binary on PATH.
+# Called from setup/action.yml. It is a separate script rather than inline in run: so that other
+# actions in this repository can install clrnd the same way (a composite action cannot uses: a
+# sibling action at the same ref, because the ref cannot come from an expression).
 #
-# 入力は環境変数で受け取る。action の inputs を run: に式で埋め込むとスクリプト
-# インジェクションになるため。
-#   CLRND_VERSION             入れる版 (0.5.1 / v0.5.1 / latest)
+# Inputs arrive as environment variables. Expanding action inputs inside run: would be a script
+# injection.
+#   CLRND_VERSION             the version to install (0.5.1 / v0.5.1 / latest)
 #   CLRND_VERIFY_ATTESTATION  true / false
-#   GH_TOKEN                  gh attestation verify が使うトークン
+#   GH_TOKEN                  the token gh attestation verify uses
 set -euo pipefail
 
 readonly repo="masasuzu/clrnd"
-# provenance を登録するのはこのワークフローだけ。別のワークフローや fork で作られた
-# 成果物を通さないよう、リポジトリだけでなくワークフローまで指定する。
+# This workflow is the only one that registers provenance. Pin the workflow, not just the
+# repository, so an archive built by another workflow or in a fork does not pass.
 readonly signer_workflow="${repo}/.github/workflows/release.yml"
 readonly semver_re='^v?[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'
 
@@ -26,8 +26,8 @@ for name in RUNNER_OS RUNNER_ARCH RUNNER_TEMP RUNNER_TOOL_CACHE GITHUB_PATH GITH
   [[ -n "${!name:-}" ]] || error "$name is not set; this script runs inside a GitHub Actions job"
 done
 
-# Windows の runner では RUNNER_TEMP などが D:\a\_temp の形で来る。bash のコマンドには
-# Unix 形式で渡し、GITHUB_PATH や PowerShell には Windows 形式で渡す。
+# On Windows runners, RUNNER_TEMP and friends arrive as D:\a\_temp-style paths. Bash commands get
+# the Unix form; GITHUB_PATH and PowerShell get the Windows form.
 to_unix() {
   if command -v cygpath >/dev/null 2>&1; then cygpath -u "$1"; else printf '%s\n' "$1"; fi
 }
@@ -35,10 +35,10 @@ to_native() {
   if command -v cygpath >/dev/null 2>&1; then cygpath -w "$1"; else printf '%s\n' "$1"; fi
 }
 
-# ---- 入力の検査 -------------------------------------------------------------
+# ---- Inputs -----------------------------------------------------------------
 
 version="${CLRND_VERSION:-}"
-# composite action の required: true は runner が強制しないので、ここで弾く。
+# The runner does not enforce required: true for composite actions, so reject an empty value here.
 [[ -n "$version" ]] || error "input 'version' is required (e.g. 0.5.1, or 'latest')"
 
 verify="${CLRND_VERIFY_ATTESTATION:-true}"
@@ -48,8 +48,8 @@ case "$verify" in
 esac
 
 if [[ "$version" == latest ]]; then
-  # API ではなく releases/latest のリダイレクト先から解決する。API はトークンが要り
-  # rate limit もあるが、こちらはどちらも無く jq も要らない。
+  # Resolve from the releases/latest redirect rather than the API. The API needs a token and is
+  # rate limited; the redirect needs neither, and no jq either.
   location=$(curl -fsS --retry 3 -o /dev/null -w '%{redirect_url}' "https://github.com/${repo}/releases/latest") ||
     error "could not resolve the latest clrnd release"
   version="${location##*/tag/}"
@@ -61,11 +61,11 @@ fi
 readonly tag="v${version#v}"
 readonly bare="${version#v}"
 
-# v0.3.0 より前のリリースには provenance attestation も --version も無く、どちらの検証も
-# できない。verify-attestation: false でも入れられるようにすると、取り違えを弾く最後の
-# 確認まで効かなくなるので、一律に断る。
+# Releases before v0.3.0 have neither a provenance attestation nor --version, so neither check can
+# run. Letting verify-attestation: false install them would also disable the final check against a
+# mixed-up archive, so they are refused outright.
 IFS=. read -r major minor _ <<<"$bare"
-# 10# を付けないと 08 のような先頭 0 付きの数字が 8 進数として解釈されて落ちる。
+# Without 10#, a zero-padded number such as 08 is parsed as octal and fails.
 if ((10#$major == 0 && 10#$minor < 3)); then
   error "clrnd $tag is not supported; this action installs v0.3.0 or later"
 fi
@@ -87,10 +87,11 @@ readonly asset="clrnd_${bare}_${os}_${arch}.${ext}"
 tool_cache=$(to_unix "$RUNNER_TOOL_CACHE")
 readonly install_dir="${tool_cache}/clrnd/${bare}/${arch}"
 readonly binary="${install_dir}/clrnd${exe}"
-# 検証まで終わったことの印。バイナリがあるだけでは、途中で落ちた回の残骸と区別できない。
+# Marks that verification finished. A binary alone cannot be told apart from what a failed run
+# left behind.
 readonly marker="${install_dir}.complete"
 
-# ---- ダウンロードと検証 -----------------------------------------------------
+# ---- Download and verification ----------------------------------------------
 
 if [[ -f "$marker" && -x "$binary" ]]; then
   echo "clrnd $tag is already installed at $install_dir"
@@ -105,8 +106,8 @@ else
   curl -fsSL --retry 3 -o "$work/checksums.txt" "$base_url/checksums.txt" ||
     error "could not download checksums.txt for clrnd $tag"
 
-  # checksums.txt は成果物と同じ場所から配られるので、これだけでは改ざんに対する保証に
-  # ならない。壊れたダウンロードを弾くためのもので、改ざんは attestation で見る。
+  # checksums.txt is served from the same place as the archive, so on its own it guarantees
+  # nothing against tampering. It catches a corrupted download; tampering is the attestation's job.
   expected=$(awk -v f="$asset" '$2 == f { print $1 }' "$work/checksums.txt")
   [[ -n "$expected" ]] || error "checksums.txt for clrnd $tag has no entry for $asset"
   if command -v sha256sum >/dev/null 2>&1; then
@@ -122,14 +123,14 @@ else
       error "gh is required to verify the build provenance attestation; install it, or set verify-attestation: false"
     [[ -n "${GH_TOKEN:-}" ]] ||
       error "gh attestation verify needs a token; pass github-token, or set verify-attestation: false"
-    # --source-ref でタグまで縛る。無いと、同じワークフローが別のタグでビルドした
-    # 成果物 (たとえば古い版) を、指定した版として通してしまう。
+    # --source-ref binds the archive to the tag. Without it, an archive the same workflow built for
+    # another tag (an older release, say) would pass as the requested version.
     gh attestation verify "$work/$asset" \
       --repo "$repo" \
       --signer-workflow "$signer_workflow" \
       --source-ref "refs/tags/$tag" >&2 ||
       error "build provenance attestation for $asset did not verify"
-    # gh は成功しても何も出さないので、検証を通ったことはここで残す。
+    # gh prints nothing on success, so record here that the check passed.
     echo "Verified the build provenance attestation: built by $signer_workflow from refs/tags/$tag"
   else
     echo "Skipped the build provenance attestation (verify-attestation: false)"
@@ -155,7 +156,7 @@ else
   echo "Installed clrnd ${bare} to $install_dir"
 fi
 
-# 取り違え (別の版・別の OS の成果物) を最後にもう一度弾く。
+# One last check against a mix-up (an archive for another version or OS).
 reported=$("$binary" --version)
 [[ "$reported" == "clrnd version ${bare}" ]] ||
   error "installed binary reports '$reported', expected 'clrnd version ${bare}'"

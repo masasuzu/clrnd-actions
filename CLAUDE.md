@@ -108,9 +108,11 @@ Push a branch to see it.
 
 ## Conventions
 
-- All user-facing strings are in **English**: `action.yml` names and descriptions, `::error::`
-  messages, the README. Code comments (shell and YAML) are in **Japanese**. Keep that split, the
-  same one clrnd uses.
+- Everything written in the repository is in **English**: `action.yml` names and descriptions,
+  `::error::` messages, code comments in shell and YAML alike, the README and this file.
+- Commit messages (subject and body), issue titles and bodies, PR titles and descriptions, and
+  review comments and replies are also written in **English**. The first commits are in Japanese;
+  leave them as they are rather than rewriting history.
 - Workflows follow the same hardening as clrnd:
   - Top-level `permissions: {}`, with each job granting only what it needs.
   - Every job has a `timeout-minutes`.

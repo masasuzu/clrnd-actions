@@ -30,10 +30,10 @@ runs:
   steps:
     - id: install
       shell: bash
-      # inputs は run: に式で埋め込まず環境変数で渡す (スクリプトインジェクション対策)。
+      # Pass inputs as environment variables, never as expressions inside run: (script injection).
       env:
         CLRND_VERSION: ${{ inputs.version }}
         CLRND_VERIFY_ATTESTATION: ${{ inputs.verify-attestation }}
         GH_TOKEN: ${{ inputs.github-token }}
-      # コミット時の実行ビットに依存しないよう、bash で起動する。
+      # Start the script through bash so it does not depend on the committed executable bit.
       run: bash "${GITHUB_ACTION_PATH}/../lib/install.sh"
