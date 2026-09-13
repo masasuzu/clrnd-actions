@@ -1,0 +1,174 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# 新しい push が来たら、同じ ref の古い実行は止める。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions: {}
+
+env:
+  # テストで入れる clrnd の版。attestation の付いたリリースであること (v0.3.0 以降)。
+  CLRND_TEST_VERSION: 0.5.1
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # runner にも shellcheck は入っているがバージョンが固定できない。版とハッシュを
+      # 指定して自前で入れる。actionlint も PATH のこれを使って run: ブロックを検査する。
+      - name: Install ShellCheck
+        env:
+          SHELLCHECK_VERSION: v0.11.0
+          SHELLCHECK_SHA256: 8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198
+        run: |
+          curl -fsSLo shellcheck.tar.xz \
+            "https://github.com/koalaman/shellcheck/releases/download/${SHELLCHECK_VERSION}/shellcheck-${SHELLCHECK_VERSION}.linux.x86_64.tar.xz"
+          echo "${SHELLCHECK_SHA256}  shellcheck.tar.xz" | sha256sum --check --strict
+          tar -xJf shellcheck.tar.xz
+          sudo install -m 0755 "shellcheck-${SHELLCHECK_VERSION}/shellcheck" /usr/local/bin/shellcheck
+          rm -rf shellcheck.tar.xz "shellcheck-${SHELLCHECK_VERSION}"
+          shellcheck --version
+
+      - name: Install actionlint
+        env:
+          ACTIONLINT_VERSION: 1.7.12
+          ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+        run: |
+          archive="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          curl -fsSLo "$archive" \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/${archive}"
+          echo "${ACTIONLINT_SHA256}  ${archive}" | sha256sum --check --strict
+          tar -xzf "$archive" actionlint
+          sudo install -m 0755 actionlint /usr/local/bin/actionlint
+          rm -f "$archive" actionlint
+
+      - name: Check the shell scripts
+        run: |
+          # bash -n は最初のファイルしか見ない (以降は位置引数になる) ので 1 つずつ回す。
+          for script in lib/*.sh; do
+            bash -n "$script"
+          done
+          shellcheck lib/*.sh
+
+      # actionlint は .github/workflows しか見ないので、action のメタデータは対象外。
+      # action.yml の誤りは下の setup ジョブが実際に uses: して見つける。
+      - name: actionlint
+        run: actionlint -color
+
+  setup:
+    name: setup (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install clrnd
+        id: install
+        uses: ./setup
+        with:
+          version: ${{ env.CLRND_TEST_VERSION }}
+
+      - name: clrnd is on PATH and is the requested version
+        env:
+          OUTPUT_VERSION: ${{ steps.install.outputs.version }}
+          OUTPUT_PATH: ${{ steps.install.outputs.path }}
+        run: |
+          test "$OUTPUT_VERSION" = "$CLRND_TEST_VERSION"
+          test "$(clrnd --version)" = "clrnd version ${CLRND_TEST_VERSION}"
+          test "$("$OUTPUT_PATH" --version)" = "clrnd version ${CLRND_TEST_VERSION}"
+
+      # 同じジョブで 2 回目は tool cache から入る経路を通る。
+      - name: Install clrnd again (cached)
+        uses: ./setup
+        with:
+          version: v${{ env.CLRND_TEST_VERSION }}
+
+  setup-inputs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: latest
+        id: latest
+        uses: ./setup
+        with:
+          version: latest
+
+      - name: latest resolves to a version
+        env:
+          RESOLVED: ${{ steps.latest.outputs.version }}
+        run: |
+          [[ "$RESOLVED" =~ ^[0-9]+\.[0-9]+\.[0-9]+ ]]
+          test "$(clrnd --version)" = "clrnd version ${RESOLVED}"
+
+      # gh を使わない経路。
+      - name: verify-attestation false
+        uses: ./setup
+        with:
+          version: ${{ env.CLRND_TEST_VERSION }}
+          verify-attestation: "false"
+
+      # attestation も --version も無い版は、verify-attestation: false でも断る。
+      - name: A release before v0.3.0 is refused
+        id: unsupported
+        continue-on-error: true
+        uses: ./setup
+        with:
+          version: 0.2.0
+          verify-attestation: "false"
+
+      - name: A version that does not exist fails
+        id: missing
+        continue-on-error: true
+        uses: ./setup
+        with:
+          version: 99.0.0
+
+      - name: A malformed version fails
+        id: malformed
+        continue-on-error: true
+        uses: ./setup
+        with:
+          version: main
+
+      - name: The refused cases failed
+        env:
+          UNSUPPORTED: ${{ steps.unsupported.outcome }}
+          MISSING: ${{ steps.missing.outcome }}
+          MALFORMED: ${{ steps.malformed.outcome }}
+        run: |
+          test "$UNSUPPORTED" = failure
+          test "$MISSING" = failure
+          test "$MALFORMED" = failure

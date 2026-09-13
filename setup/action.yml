@@ -1,0 +1,39 @@
+name: Set up clrnd
+description: Install a verified clrnd release and add it to PATH.
+
+inputs:
+  version:
+    description: >-
+      The clrnd release to install, such as `0.5.1` or `v0.5.1` (v0.3.0 or later). `latest`
+      takes the newest release at run time, so the same workflow can install a different
+      version tomorrow.
+    required: true
+  verify-attestation:
+    description: >-
+      Verify the archive's GitHub build provenance attestation with `gh attestation verify`
+      before installing it. Needs `gh` on the runner.
+    default: "true"
+  github-token:
+    description: The token `gh attestation verify` authenticates with.
+    default: ${{ github.token }}
+
+outputs:
+  version:
+    description: The installed version, without the `v` prefix.
+    value: ${{ steps.install.outputs.version }}
+  path:
+    description: The absolute path of the installed `clrnd` binary.
+    value: ${{ steps.install.outputs.path }}
+
+runs:
+  using: composite
+  steps:
+    - id: install
+      shell: bash
+      # inputs は run: に式で埋め込まず環境変数で渡す (スクリプトインジェクション対策)。
+      env:
+        CLRND_VERSION: ${{ inputs.version }}
+        CLRND_VERIFY_ATTESTATION: ${{ inputs.verify-attestation }}
+        GH_TOKEN: ${{ inputs.github-token }}
+      # コミット時の実行ビットに依存しないよう、bash で起動する。
+      run: bash "${GITHUB_ACTION_PATH}/../lib/install.sh"

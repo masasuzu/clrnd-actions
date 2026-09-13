@@ -1,0 +1,8 @@
+# Actions is SHA-pinned, so nothing updates on its own. Without this file the pins simply grow
+# stale, which is worse than not pinning at all.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
