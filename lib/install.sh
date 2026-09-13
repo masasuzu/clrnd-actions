@@ -115,6 +115,7 @@ else
     actual=$(shasum -a 256 "$work/$asset" | awk '{ print $1 }')
   fi
   [[ "$actual" == "$expected" ]] || error "checksum mismatch for $asset: expected $expected, got $actual"
+  echo "Checksum matches checksums.txt"
 
   if [[ "$verify" == true ]]; then
     command -v gh >/dev/null 2>&1 ||
@@ -128,6 +129,10 @@ else
       --signer-workflow "$signer_workflow" \
       --source-ref "refs/tags/$tag" >&2 ||
       error "build provenance attestation for $asset did not verify"
+    # gh は成功しても何も出さないので、検証を通ったことはここで残す。
+    echo "Verified the build provenance attestation: built by $signer_workflow from refs/tags/$tag"
+  else
+    echo "Skipped the build provenance attestation (verify-attestation: false)"
   fi
 
   mkdir -p "$work/extract"
@@ -147,6 +152,7 @@ else
   mv "$work/extract/clrnd${exe}" "$binary"
   chmod +x "$binary"
   touch "$marker"
+  echo "Installed clrnd ${bare} to $install_dir"
 fi
 
 # 取り違え (別の版・別の OS の成果物) を最後にもう一度弾く。
@@ -159,4 +165,3 @@ to_native "$install_dir" >>"$GITHUB_PATH"
   echo "version=${bare}"
   echo "path=$(to_native "$binary")"
 } >>"$GITHUB_OUTPUT"
-echo "Installed clrnd ${bare} to $install_dir"

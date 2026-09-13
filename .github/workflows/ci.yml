@@ -120,6 +120,22 @@ jobs:
         with:
           persist-credentials: false
 
+      # gh を使わない経路。このジョブで他のステップが入れない版を使う。tool cache に
+      # 当たるとダウンロードも検証も飛ばされ、この経路を通らないまま成功してしまう。
+      - name: verify-attestation false
+        id: no-verify
+        uses: ./setup
+        with:
+          version: 0.4.0
+          verify-attestation: "false"
+
+      - name: verify-attestation false installs the requested version
+        env:
+          INSTALLED: ${{ steps.no-verify.outputs.version }}
+        run: |
+          test "$INSTALLED" = 0.4.0
+          test "$(clrnd --version)" = "clrnd version 0.4.0"
+
       - name: latest
         id: latest
         uses: ./setup
@@ -132,13 +148,6 @@ jobs:
         run: |
           [[ "$RESOLVED" =~ ^[0-9]+\.[0-9]+\.[0-9]+ ]]
           test "$(clrnd --version)" = "clrnd version ${RESOLVED}"
-
-      # gh を使わない経路。
-      - name: verify-attestation false
-        uses: ./setup
-        with:
-          version: ${{ env.CLRND_TEST_VERSION }}
-          verify-attestation: "false"
 
       # attestation も --version も無い版は、verify-attestation: false でも断る。
       - name: A release before v0.3.0 is refused
